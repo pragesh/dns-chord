@@ -1,0 +1,477 @@
+#!/usr/bin/env python
+
+'''
+This file implements the driver process that acts like a peer-to-peer file transfer service.
+Intially this driver program uploads a file Chord.html to the ring. The source of this file
+is Node 0. The file contents get distributed to different nodes. Then, Node 4 tries to retrieve the file
+from these nodes. Basically, it works like a torrent.
+'''
+
+import random
+import copy
+import time
+import math
+import hashlib
+from Changed_Chord import Node
+from Changed_Chord import Finger
+from Changed_Chord import ChordNode
+import sys
+import pandas as pd
+
+config(Channel is Reliable, Handling is one)
+
+class Driver(process):
+	'''
+	This class is the driver program and  implements a file sharing application type application.
+	'''
+	def setup(ps, m,probFail,nqueries,fName1,fName2,runNo,latencyStorageAnalyze):
+		self.s = ps
+		self.max_procs = int(math.pow(2, m))
+		self.torrent_file = dict()
+		self.NodeIds = set()
+		self.probabilityOfFailure = probFail
+		self.runningNodes = list(ps)[1:]
+		self.failedNodes = list()
+		self.keyList = list()
+		self.noOfQueries = nqueries
+		self.logFile = fName1
+		self.runNumber = runNo
+		self.logLoadFile = fName2
+		self.avgHopCount=0.0
+		self.avgLatency=0.0
+		self.succLookupRatio = 0.0
+		self.timeOutRatio = 0.0
+		self.latencyCdfFile="latencyCDF.txt"
+		self.islatencyStorageAnalyze = latencyStorageAnalyze
+		self.mBits = m
+	#Join a node to the ring. Expects n_id to be the hashed value, which acts as node id.
+	#Equivalent to helper.join(n, n_id)
+	def join_node_raw(n, n_id, helper):
+		send(('JoinRing',helper, n_id), to=n)
+
+	"""
+	
+	"""
+	
+	def generateNodeId():
+		'''
+		Join a node to the ring. Computes n_id from ip_address of node.
+		Equilavent to helper.join(n)
+		Changes  Original Program did not consider Collision.
+		Arguments:
+					  
+		Return: 
+				Node Id for ring
+		'''		
+		while True:
+			nodeId= random.randint(0,max_procs-1)
+			if nodeId not in NodeIds:
+				NodeIds.add(nodeId)
+				return nodeId
+
+	def join_node(n, helper): 
+		'''
+		Join a node to the ring. Computes n_id from ip_address of node.
+		Equilavent to helper.join(n)
+		Changes : Original Program did not consider Collision.
+		Arguments:
+				n: Node to join
+				helper: helper node that helps a node to join
+					  
+		Return: 
+				
+		'''	
+		n_id = generateNodeId()
+		send(('JoinRing',helper, n_id), to=n)
+
+	#Kill a node
+	def remove(n):
+		'''
+		Kills a node N
+		Arguments:
+				n: Node to Kill
+					  
+		Return: 
+				
+		'''	
+		send(('KillNode'),to= n)
+
+	#Receover a node
+	def recover(n):
+		'''
+		Recovers a node N
+		Arguments:
+				n: Node to Recover
+					  
+		Return: 
+				
+		'''	
+		send(('RecoverNode'),to= n)
+
+
+
+	def insert_key(key, value, helper):
+		'''
+		Insert a key-value pair in the ring. It hashes the key to find the id.
+		Equivalent to helper.insert_key(key, value)
+		Arguments:
+				key: key of Data
+				value: value of Data
+				helper:  node which helps enter these data
+					  
+		Return: 
+				
+		'''	
+		h = hashlib.sha1((str(key)).encode('utf-8'))
+		id = int(h.hexdigest(), 16) % max_procs
+ 
+		--insertkey
+		send(('InsertKey',key, value, id, self),to= helper)
+		keyList.append(key)
+		--waitforreturnvalue
+		await (some(received(('ReturnValue',a1))))
+		ret = list(setof(a1,received(('ReturnValue',a1))))[0]
+		reset(received)
+		return ret
+
+
+	def exit_proc(node):
+		'''
+		Exit procedures
+		Arguments:
+				node: node to exit
+					  
+		Return: 
+				
+		'''	
+		send(('DoExit'), to=node)
+
+	
+	#lookup for COrrectness testing
+	def correctnessLookup(key, helper):
+		'''
+		Perform Corrdctness Lookup
+		Arguments:
+				n:key key of Data
+				helper: = node which helps enter these data
+					  
+		Return: 
+				-1 if timeout
+				else the value stored in chord
+				
+		'''	
+		h = hashlib.sha1((str(key)).encode('utf-8'))
+		id = int(h.hexdigest(), 16) % max_procs
+		hopCount=0
+		--querykey
+		send(('FindKey',key, id, self,hopCount),to= helper)
+		if(await (some(received(('Value',a1,a2,a3)),has= (a3==key)))):
+			val,hopCount = list(setof((a1,a2),received(('Value',a1,a2,a3)),(a3==key)))[0]
+			reset(received)
+			#output('Value is---------> ' + val)
+			return val
+		elif(timeout(10)):
+			reset(received)
+			output('Timeout.......')
+			return -1
+
+
+	
+	def lookup(key, helper,i):
+
+		'''
+		Lookup a key-value pair in the ring. It hashes the key to find the id.
+		Equivalent to val = helper.lookup(key)
+		Arguments:
+				n:key = key of Data
+				helper = node which helps enter these data
+				i:   
+		Return: 
+				-1 if timeout
+				else the value stored in chord
+				
+		'''	
+		h = hashlib.sha1((str(key)).encode('utf-8'))
+		id = int(h.hexdigest(), 16) % max_procs
+		hopCount = 0
+		reset(received)
+		file = open(self.latencyCdfFile,'a')
+		--querykey
+		startTime = time.time()
+		send(('FindKey',key, id, self,hopCount),to= helper)
+
+		--waitforvalue 
+		#wait for key to be received within a particular time. If not received report failure
+		if(await (some(received(('Value',a1,a2,a3)),has= (a3==key)))):
+			endTime = time.time()
+			val,hopCount = list(setof((a1,a2),received(('Value',a1,a2,a3)),(a3==key)))[0]
+			# RunNo,QueryNo,HopCount,Latency,IsSucess,IsTimeout
+			isSucessLookup = True
+			if val=='-1':
+				isSucessLookup = False
+
+
+			self.avgHopCount += hopCount
+			self.avgLatency += endTime-startTime
+			self.succLookupRatio +=(int)(isSucessLookup)
+			
+			if islatencyStorageAnalyze == True:
+				file.write(str(endTime-startTime)+'\n')
+			
+		elif(timeout(0.5)):
+			endTime = time.time()
+			#file.write(str(self.runNumber)+','+str(i)+','+str(self.max_procs)+','+str(endTime-startTime)+','+'False'+','+'True\n')
+			self.avgHopCount += self.mBits
+			self.avgLatency += endTime-startTime
+			self.timeOutRatio+=1
+		file.close()
+
+	def get_key_count(n):
+		--querynumkeys
+		send(('GetNumKeys'),to= n)
+
+		--waitforvalue
+		await (some(received(('NumKeys',a1))))
+		val = list(setof(a1,received(('NumKeys',a1))))[0]
+		reset(received)
+		return val
+
+	def exit_all_procs():
+		
+		'''
+		Exit all nodes
+		Arguments:
+				  
+		Return: 
+				
+		'''
+
+		file = open(self.logLoadFile,'a')
+		count =0
+		for p in list(ps)[1:]:
+			--killnode
+			reset(received)
+			remove(p)
+			time.sleep(0.5)
+			exit_proc(p)
+			if(await (some(received(('ExitValues',a1,a2))))):
+				storageLoad,queryLoad = list(setof((a1,a2),received(('ExitValues',a1,a2))))[0]
+				file.write(str(self.runNumber)+','+str(storageLoad)+','+str(queryLoad)+'\n')
+			elif(timeout(15)):
+				pass
+			#reset(received)
+			time.sleep(0.5)
+
+		remove(list(ps)[0])
+		time.sleep(1)
+		exit_proc(list(ps)[0])
+
+		if(await (some(received(('ExitValues',a1,a2))))):
+			storageLoad,queryLoad = list(setof((a1,a2),received(('ExitValues',a1,a2))))[0]
+			file.write(str(self.runNumber)+','+str(storageLoad)+','+str(queryLoad)+'\n')
+		elif(timeout(15)):
+			pass
+		reset(received)
+		time.sleep(1)
+		#exit File
+		file.close()
+
+		output('Driver Exited.....')
+
+	def probabilityFailure():
+		'''
+		Recover failed nodes and also fail nodes with probability p of failing
+		Arguments:
+				  
+		Return: 
+				
+		'''
+		#Make failed nodes to become running
+		for p in failedNodes:
+			probVal = random.uniform(0, 1)
+			if probVal > probabilityOfFailure :
+				runningNodes.append(p)
+				recover(p)
+				failedNodes.remove(p)
+
+		#Make running nodes to fail
+		for p in runningNodes:
+			probVal = random.uniform(0, 1)
+			if probVal < probabilityOfFailure :
+				failedNodes.append(p)
+				remove(p)
+				runningNodes.remove(p)
+
+		return 
+
+	def runQueries():
+		'''
+		Run Q queries
+		Arguments:
+				  
+		Return: 
+				
+		'''
+		#Execute Q queries
+		for i in range(self.noOfQueries):
+			# Probabiltiy Failure includes make one failed node to become alive and vice versa
+			probabilityFailure()
+			#lookup and Report Succes or Failure
+			# RunNo,QueryNo,HopCount,Latency,IsSucess,IsTimeout
+			tempKey = random.choice(keyList)
+			tempProcess = random.choice(list(ps))
+			lookup(tempKey,tempProcess ,i)
+
+		self.avgHopCount/=self.noOfQueries
+		self.avgLatency/=self.noOfQueries
+		self.succLookupRatio /=self.noOfQueries
+		self.timeOutRatio/= self.noOfQueries
+
+		file = open(self.logFile,'a')
+		file.write(str(self.runNumber)+','+str(self.avgHopCount)+','+str(self.avgLatency)+','+str(self.succLookupRatio)+','+str(self.timeOutRatio)+'\n')
+		file.close()
+
+
+	def insertdata():
+		'''
+		Read CSV DNS Data and Insert them
+		Arguments:
+				  
+		Return: 
+				
+		'''
+		data = pd.read_csv("DNA_TempData.csv")
+		#Insert this data
+		for index, row in data.iterrows():
+			#print('Inserted Data')
+			insert_key(row['key'], row['value'], list(ps)[0])
+
+	def run():
+		output("Driver Program Started...........")
+
+		#Joining Nodes to the Ring
+		for p in ps:
+			--joinNode
+			join_node(p,list(ps)[0])
+			time.sleep(0.1)
+
+		output("Nodes Addded Succesfully.....")
+
+		#Insert Values in Ring
+		time.sleep(0.1)
+		insertdata()
+		output("Inserted Data Succesfully.....")
+		correctnessTesting()
+
+		#For Q queries select random keys and make search
+		output("Started Executing Queries.....")
+		runQueries()
+		output("Finished Executing Queries.....")
+		time.sleep(1)
+
+		#Exit All Process
+			#for each exit of process report total Storage and Load
+			# eg RunNo,NodeNumber,Storage,Load
+		exit_all_procs()
+
+	'''
+	Taking input from a file where its first 5 entries are inserted and other 5 are not. if the value is not inserted then the expected outcome is -1 
+	or if timeout occurs while querying the output should be -1, in all other case the value should match 
+	'''
+	def correctnessTesting():
+		'''
+		Taking input from a file where its first 5 entries are inserted and other 5 are not. if the value is not inserted then the expected outcome is -1 
+		or if timeout occurs while querying the output should be -1, in all other case the value should match
+		Arguments:
+				  
+		Return: 
+				
+		'''
+		output("Correctness Testing Started.......")
+		
+		time.sleep(4)
+		data = pd.read_csv("CorrectnessData.csv")
+		#Insert this data
+		for index, row in data.iterrows():
+			expectedOutput = correctnessLookup(row['key'], random.choice(list(ps)))
+			if row['value'].strip() != str(expectedOutput).strip() and expectedOutput!= '-1' :
+				output('Key value is' + row['key'])
+				output('value is' + row['value'])
+				output('Expected Output' + expectedOutput)
+				output('Correctness Failed..........')
+				return
+		output('Correctness Passed..........')
+	return 	
+
+
+def main():
+	'''
+	Main function.
+	'''
+	
+	
+
+	
+	
+	
+	'''
+	
+	mBits = 5#int(sys.argv[1])
+	noOfProcess = 7#int(sys.argv[2])
+	noOfSuccessor = 2#int(sys.argv[3])
+	noOfQueries = 200 #int(sys.argv[4])
+	stabilizeDelay = 0.1#int(sys.argv[5])
+	fixFingerDelay = 0.1#int(sys.argv[6])
+	checkPredecessorDelay = 0.1#int(sys.argv[7])
+	probabilityOfFailure = 0.1#int(sys.argv[8])
+	runNo = 1
+	logFileName = 'result.txt'
+	logLoadFileName = 'result2.txt'
+	latencyStorageAnalyze = False
+	readDataFile = 2#int(sys.argv[3])
+	
+	'''
+
+	
+	
+	if len(sys.argv) < 9:
+		print("Error. Enter value of m=num of entries in finger table, r=length of successor list, t=test case number, f=flag to turn on visualization of finger table routes ")
+		exit(0)	
+
+
+	mBits = (int(sys.argv[1]) )
+	noOfProcess = int(sys.argv[2])
+	noOfSuccessor = int(sys.argv[3])
+	noOfQueries = int(sys.argv[4])
+	stabilizeDelay = float(sys.argv[5])
+	fixFingerDelay =float(sys.argv[6])
+	checkPredecessorDelay =float(sys.argv[7])
+	probabilityOfFailure = float(sys.argv[8])
+	runNo = int(sys.argv[9])
+
+	latencyStorageAnalyze = False
+	if len(sys.argv) > 10:
+		latencyStorageAnalyze = True
+
+	logFileName = 'resultDistAlgo.txt'
+	logLoadFileName = 'resultDistAlgo2.txt'
+	
+	
+
+	ps = new(ChordNode, num=noOfProcess)
+	driver = new(Driver, num=1)
+	
+	setup(driver, (ps, mBits,probabilityOfFailure,noOfQueries,logFileName,logLoadFileName,runNo,latencyStorageAnalyze))
+	
+	
+	proc_id = 0
+	for p in ps:
+		setup(p, (ps-{p}, driver, mBits, noOfSuccessor,stabilizeDelay,fixFingerDelay,checkPredecessorDelay))
+
+	start(driver)
+	start(ps)
+
+	#Start the driver process at the end
+	#setup(3, ({<ChordNode:d6402>}, {<Driver:d6404>}, 4, 2))
+
+	# succesorListSize, 

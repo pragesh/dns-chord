@@ -1,0 +1,656 @@
+#!/usr/bin/env python
+
+'''
+This program implements chord which is an algorithm for a peer-to-peer distributed hash table.
+It uses DistAlgo to create processes that simulate the nodes in the chord ring. A driver program 
+acts as a command interface to the chord ring. Visualization process is responsible to dynamically 
+render the network state on screen.
+ 
+The program takes two necessary arguments and two optional arguments:
+	'm' - number of entries in the finger table. 2^m will determine maximum allowed number of nodes
+		  in the ring.
+	'r' - number of successors needed in the successor list.
+	't' - test case number
+	'f' - flag to turn on visualization
+'''
+
+import random
+import copy
+import time
+import math
+import hashlib
+config(Channel is Reliable, Handling is one)
+
+
+'''
+Set this flag to True if you want to turn on load_balancing.
+Else set it to false.
+'''
+load_balancing_on = True
+
+class Node:
+	'''
+	Each node is a combination of tcp process created bt distalgo and a unique identifier.
+	'''
+	def __init__(self,n, num):
+		self.node = n
+		self.id = num
+
+	def __str__(self):
+		return (str(self.id))
+
+
+class Finger:
+	'''
+	A Finger is a entry in the finger table.
+	'''
+	def __init__(self,s, si, ei, p):
+		self.start = s
+		self.int_start = si
+		self.int_end =  ei
+		self.cnode = Node(-1, -1)
+		self.parent = p
+
+	def __str__(self):
+		return (str("Finger:") + str(self.parent) + ", " + str(self.start) + ", " + str(self.int_start) + ", " + str(self.int_end) + ", " + str(self.cnode) + ", " +	  str(self.cnode.id))
+
+class ChordNode(process):
+	'''
+	Each entity of this class is a DistAlgo process and represents a node in the network. Each node has
+	a successor and a predecessor. It also maintains a 'r' length list of successors to deal with node
+	failures. The keys and values are stored in a dictionary. If the node is alive, then its corresponding 
+	is_alive flag is set to 1, however, if the node is dead, it is set to -1. The finger table is a
+	dictionary which stores the routing information for quick lookup.
+	'''
+	#Setup
+	def setup(ps, d, m, r,stbDelay,fixDelay,predDelay):
+		self.proc_id = -1
+		self.successor = Node(-1, -1)
+		self.predecessor = Node(-1, -1)
+		self.newSucc = Node(-1, -1)
+		self.helper = -1
+		self.proclist = ps
+		self.finger = dict()
+		self.kv_store = dict()
+		self.is_alive = 1
+		self.max_succ = r
+		self.succ_list = dict()
+		self.needs_join = False
+		self.driver = d
+		self.exited = False
+		self.maxNodes = int(math.pow(2, m) )
+		self.stabilizeDelay = stbDelay
+		self.fixFingerDelay = fixDelay
+		self.checkPredecessorDelay = predDelay
+		self.stabilizeFrequency = time.time()
+		self.fixFingerFrequency = time.time()
+		self.checkPredecessorFrequency = time.time()
+		self.storageLoad = 0
+		self.queryLoad = 0
+
+
+	def printFingerTable():
+		for i in range(1, m+1):
+			output(str(finger[i]))
+
+	def run():
+		--waitforjoinreq
+
+		output("started Proc")
+		await (some(received(('JoinRing',a1, a2))))
+		#output("received Proc")
+
+		h, proc_id = list(setof((a1,a2) , received(('JoinRing' , a1, a2))))[0]
+		reset(received)
+		#output("Node Added")
+		init_node(h, proc_id)
+		#self.successor =  Node(self,proc_id)
+		#self.predecessor = Node(self,proc_id)
+
+		needs_join = True
+		while True:
+			
+			if (self.exited == True):
+				break
+
+			#if flag%100==0:
+			#	output(self.exited)
+
+			if (is_alive == 1):
+				if (needs_join == True):
+					joinCheck()
+					join_correct()
+					reconcile()
+
+				perform_periodic_operations()
+				fix_fingers()
+				check_dead_nodes()
+				#if flag == 100:
+				#	printFingerTable()
+				#	output(str(newSucc))
+			else:
+				--nothingtodo
+				pass
+
+		output('Chord Node Exiting .....')
+
+	def init_node(h, procid):
+		'''
+		Initialize the node
+		'''
+		proc_id = procid
+		successor = Node(self,proc_id)
+		predecessor = Node(self,proc_id)
+		helper = h
+		finger = dict()
+		for i in range(1, m+1):
+			finger[i] = Finger((int(math.pow(2, i-1)) + proc_id)%maxNodes, (int(math.pow(2, i-1)) + proc_id)%maxNodes, (int(math.pow(2, i)) + proc_id) %maxNodes, proc_id)
+
+
+	def joinCheck():
+		'''
+		Update the newSucc pointer before joining the chord ring.
+		'''
+		newSucc = rpc_find_successor(helper, proc_id)
+
+
+	def rpc_find_successor(helper, nid):
+		'''
+		RPC to find the successor of a node 'n'. It uses the helper node to find the successor of n.
+		Sends a 'FindSuccessor' message to node 'n'. This is equivalent to helper.find_successor(n)
+		 
+		Arguments:
+				helper = helper node
+				nid = node whose successor needs to be found out.
+					  
+		Return:
+				succ = successor of node n.
+		'''
+		--sendreq
+		send(('FindSuccessor',self, nid), to=helper)
+
+		--waitforreply
+		await (some(received(('Successor',a1))))
+		s = list(setof(a1, received(('Successor',a1))))[0]
+		reset(received)
+
+		return s
+
+
+
+	def receive(msg= ('FindSuccessor',org, id)):
+		'''
+		This is a message handler which is signalled by rpc_find_successor() function.
+		It finds the successor of node 'n' and sends it to the node 'org' which requested it.
+		Sending successor directly to the requester is advantageous in two ways.
+			1: It reduces the number of messages required in returning the values
+			2: The intermediate nodes do not wait/block for these values
+
+			Arguments:
+				n = node whose successor needs to be found out
+				org = node corresponding to the requester
+
+			Return value:
+				void
+		'''
+		if (between(proc_id, id, successor.id) == True or id == successor.id): # 'or' because of <= case
+			send(('Successor',successor),to= org)
+		else:
+			#For optimized lookup
+			n0 = closest_preceding_node(id)
+
+			if (n0.node == -1):
+				send(('Successor',Node(-1, -1)),to= org)
+			elif (n0.node == self):
+				send(('Successor',successor),to= org)
+			else:
+				send(('FindSuccessor',org, id),to= n0.node)
+
+
+	def closest_preceding_node(id):
+		'''
+		Find the closest preceding node.
+		 
+		Arguments:
+			id = node
+				  
+		Return value:
+			p = node corresponding to closest preceding node.
+		'''
+		cn = []
+		cn = [finger[i].cnode for i in range(m, 0, -1) if (cn == [] and between(proc_id, finger[i].cnode.id, id) == True)]
+		if (cn != []): return cn[0]
+		else: return Node(self, proc_id)
+
+	def join_correct():
+		'''
+		Join the chord ring.
+		'''
+		if proc_id !=0:
+			predecessor = Node(-1, -1)
+			if (newSucc.id != -1):
+				succ = rpc_get_successor(newSucc.node)
+				pred = rpc_get_predecessor(newSucc.node)
+
+				if (succ.id != -1 and pred.id != -1):
+					if (between(pred.id, proc_id, newSucc.id) == True):
+						successor = newSucc
+						my_keys = rpc_get_my_keys(successor.node, proc_id)
+						kv_store.update(my_keys)
+				else:
+					newSucc = Node(-1, -1)
+		else:
+			successor = Node(self, 0)
+			predecessor = Node(self, 0)
+
+		needs_join = False
+
+
+	def rpc_get_successor(n):
+		'''
+		RPC to get the immediate successor of a node 'n'.
+		Sends a 'GetSuccessor' message to node 'n'.
+		 
+		Arguments:
+			n = node whose successor needs to be found out.
+				  
+		Return:
+			pred = immediate successor of node n.
+		'''
+		if (n == self):
+			return successor
+
+		--sendreq
+		send(('SendImmSuccessor'),to= n)
+	   
+		--reply
+		await (some(received(('Successor',a1))))
+
+		--populate
+		s = list(setof(a1, received(('Successor',a1))))[0]
+		reset(received)
+		return s
+
+	def receive(msg= ('SendImmSuccessor'),from_ = source):
+		'''
+		Send the immediate successor of this node
+		'''
+		send(('Successor',successor),to= source)
+
+
+	def rpc_get_predecessor(n):
+		'''
+		RPC to find the immediate predecessor of a node 'n'.
+		Sends a 'GetPredecessor' message to node 'n'.
+		 
+		Arguments:
+			n = node whose predecessor needs to be found out.
+				  
+		Return:
+			pred = immediate predecessor of node n.
+		'''
+		if (n == -1):
+			return Node(-1, -1)
+
+		--sendreq
+		send(('FindPredecessor'), to= n)
+	   
+		--reply
+		await (some(received(('Predecessor',a1))))
+
+		--populate
+		pred = list(setof(a1 , received(('Predecessor',a1))))[0]
+		reset(received)
+		return pred
+
+
+	def receive( msg=('FindPredecessor'),from_ = source):
+		'''
+		This message handler is signalled by the driver or by rpc_get_predecessor()
+		Sends the immediate predecessor of this node.
+		'''
+		send(('Predecessor',predecessor),to= source)
+
+
+	def rpc_get_my_keys(n, n_id):
+		'''
+		RPC to get keys from successor between node's id to successor's id
+		'''
+		d = dict()
+		
+		if (n == self or n_id == -1 or n == -1):
+			return d
+
+		--sendreq
+		send(('GetMyKeys',n_id),to= n)
+
+
+		--reply
+		await (some(received(('YourKeys',a1))))
+
+		--returnfingers
+		f = list(setof(a1 , received(('YourKeys',a1))))[0]
+
+		if (f != -1):
+			d.update(f)
+			print(d)
+
+		reset(received)
+		return d
+
+	def receive( msg=('GetMyKeys',id), from_ = source):
+		'''
+		Reblance the fingers. Send the belonging fingers.
+		'''
+		fgr = dict()
+
+		if (load_balancing_on):
+			temp = copy.deepcopy(kv_store)
+			for key in kv_store:
+				h = hashlib.sha1((str(key)).encode('utf-8'))
+				nid = int(h.hexdigest(), 16) % maxNodes
+				if (id == nid or between(proc_id, nid, id)):
+					fgr[key] = kv_store[key]
+					del temp[key]
+
+			kv_store = temp
+
+		if (len(fgr.keys()) > 0):
+			#print("My kv_store is :")
+			#print(kv_store)
+			send(('YourKeys',frozenset(fgr.items())),to= source)
+		else:
+			send(('YourKeys',-1),to= source)
+
+	def reconcile():
+		'''
+		Update/populate "max_succ" number of successors for this node
+		'''
+		s = successor
+		for i in range(0, max_succ):
+			if s.id != proc_id and s.id != -1:				
+				s = rpc_get_successor(s.node)
+			succ_list[i] = s
+
+
+	def perform_periodic_operations():
+		'''
+		This function is called periodically by each node to update all the data structures and stablizing itself.
+		'''
+
+		# execute this function at frequency of time = stabilizeDelay
+		if  (time.time() - stabilizeFrequency) < stabilizeDelay :
+			return
+
+		stabilizeFrequency = time.time()
+
+		stabilizeCheck()
+		stabilize()
+		reconcile()
+
+		--notify
+		if (successor.id != -1):
+			send(('Notify',proc_id, successor.id),to= successor.node)
+
+
+	def stabilizeCheck():
+		'''
+		Update the successor before stabilizing
+		'''
+		newSucc = rpc_get_predecessor(successor.node)
+
+	def stabilize():
+		'''
+		This function is called periodically by each node to stabilize the ring
+		'''
+		if (newSucc.id != -1):
+			temp = rpc_get_successor(newSucc.node)
+			if (temp.id != -1):
+				if (between(proc_id, newSucc.id, successor.id) == True):
+					successor = newSucc
+			else:
+				newSucc = Node(-1, -1)
+
+
+	def receive( msg=('Notify',id, n),from_ =source):
+		'''
+		Notify a node about its predecessor
+		'''
+		if (is_alive == 1):
+			if (predecessor.node == -1):
+				predecessor = Node(source, id)
+			elif (between(predecessor.id, id, n) == True):
+				predecessor = Node(source, id)
+
+	def fix_fingers():
+		'''
+		This function is called periodically. It fixes the finger table entries of this node.
+		'''
+
+		#Execute Fixed Finger at frequency of time = fixFingerDelay
+		if time.time() - fixFingerFrequency < fixFingerDelay :
+			return 
+
+		fixFingerFrequency = time.time()
+
+		for i in range(1, m+1):
+			finger[i].cnode = rpc_find_successor(helper, finger[i].start)
+
+	def check_dead_nodes():
+		'''
+		This function is called periodically. Check if node's predecessor or successor is dead.
+		Change the predecessor and successor to skip this node. Basically, remove the dead node from
+		the ring.
+		'''
+
+		#Execute this function at a frequency of time = 
+		if time.time() - checkPredecessorFrequency < checkPredecessorDelay :
+			return 
+
+		checkPredecessorFrequency = time.time()
+
+		flush()
+		update()
+
+
+	def flush():
+		'''
+		Handle if node's predecessor dies.
+		'''
+		if (predecessor.node != -1 and predecessor.node != self and rpc_is_node_alive(predecessor.node) != 1):
+			#print("Predecessor %s of %s is dead" % ((str(predecessor.id), str(proc_id))))
+			predecessor = Node(-1, -1)
+
+	def update():
+		'''
+		Handle if node's successor dies.
+		'''
+		if (successor.node != -1 and successor.node != self and rpc_is_node_alive(successor.node) != 1):
+			#print("Successor %s of %s is dead" % ((str(successor.id), str(proc_id))))
+			successor = next_live_successor()
+
+
+	def rpc_is_node_alive(n):
+		'''
+		RPC to check if the node 'n' is alive. It sends a message to 'n' which then responds with
+		its status. Sends a 'GetStatus' message to node 'n'.
+		 
+		Arguments:
+				n = node
+				  
+		Return value:
+				status = status of node n. 1 if alive, 0 otherwise
+		'''
+		--getstatus
+		send(('GetStatus'),to= n)
+
+		--waitforstatus
+		await (some(received(('Status',a1))))
+		st = list(setof ( a1 , received(('Status',a1))))[0]
+		reset(received)
+		return st
+
+	def receive( msg=('GetStatus'),from_ = source):
+		'''
+		This message handler is signalled by the driver.
+		Sends the status of node as live or dead.
+		'''
+		send(('Status',is_alive),to= source)
+
+
+
+	def next_live_successor():
+		'''
+		Find the next live successor from the successor list of the node. This is needed when a
+		successor of node is dead and it needs to point to next successor.
+		 
+		Return value:
+				 succ = next live successor in this list
+		'''
+		sl = []
+		sl = [succ_list[i] for i in range(0, max_succ) if (sl == [] and (succ_list[i].node == -1 or succ_list[i].node == self or rpc_is_node_alive(succ_list[i].node) == 1))]
+
+		if (sl != []): return sl[0]
+		else: return Node(-1, -1)
+
+
+	def  receive( msg=('FindKey',key, node_id, org, hopCount)):
+		'''
+		This is a message handler that looks up for a (key,value) pair in the ring.
+		This handler is signalled by the driver process.
+		 
+		 Arguments:
+				key = key to lookup
+				org = node which requested for the key. This node is required because lookup is
+					  recursive and we need to send the found value to the original node, instead of
+					  sending it to intermediate nodes.
+				node_id = node which has the key,value pair. Basically, the sha1 hash to identify node.
+										  
+		Return value:
+				value = value corresponding to the key
+		'''
+		#if is alive == -1 , do not respond
+		if is_alive != 1:
+			return
+
+		self.queryLoad+=1
+
+		#print("In find key node_id=%s  procid=%s" % (str(node_id), str(proc_id)))
+
+		try:
+			if (between(predecessor.id, node_id, proc_id) == True or node_id == proc_id):
+				if key in kv_store:
+					send(('Value',str(kv_store[key]),hopCount+1,key),to= org)
+				else:
+					send(('Value','-1',hopCount+1,key),to= org)
+				return
+
+			for i in range(m, 0, -1):
+				if (between(finger[i].int_start, node_id, finger[i].int_end) == True or node_id == finger[i].int_start):
+					send(('FindKey',key, node_id, org,hopCount+1),to= finger[i].cnode.node)
+					return
+		except:
+			pass
+
+		send(('Value','-1',hopCount+1,key),to= org)
+		return
+
+	def receive( msg=('InsertKey',key, val, node_id, org)):
+		'''
+		This is a message handler to insert a (key, value) pair in the ring.
+		This handler is signalled by the driver process.
+ 
+		Arguments:
+			key = key to insert
+			val = value corresponding to the key to insert
+			org = node which signalled insert command for the key. This node is required because insert is
+				  recursive and we need to send the return value to the original node, instead of
+				  sending it to intermediate nodes.
+		
+ 
+		Return value:
+			1 if insert was successful, 0 otherwise
+		'''
+		#print("In insert key node_id=%s  procid=%s" % (str(node_id), str(proc_id)))
+
+		#If this node is not yet joined, search the key in the node succeeding this node.
+		#If the key belongs to this node, then just insert it.
+		try:
+			if (between(predecessor.id, node_id, proc_id) == True or node_id == proc_id):
+				kv_store[key] = val
+				self.storageLoad+=1
+				send(('ReturnValue',True),to= org)
+				return
+
+			for i in range(m, 0, -1):
+				if (between(finger[i].int_start, node_id, finger[i].int_end) == True or node_id == finger[i].int_start):
+					send(('InsertKey',key, val, node_id, org),to= finger[i].cnode.node)
+					return
+		except:
+			pass
+
+		send(('ReturnValue',False),to= org)
+		return
+
+
+	def receive( msg=('KillNode')):
+		'''
+		This is a message handler which is signalled from the driver to kill this node. 
+		Sets is_alive flag to 0. This flag will be used by other nodes to figure out if this node is live or dead.
+		'''
+		#print("\nNode %s is getting killed" % ((str(proc_id))))
+		is_alive = -1
+
+
+	def receive( msg=('DoExit'),from_ = driver):
+		'''
+		Exit this process.
+		'''
+		self.is_alive = -1
+		send(('ExitValues',self.storageLoad,self.queryLoad),to= driver)
+		self.exited = True
+		output('Exit Called .....')
+
+
+	def receive( msg=('RecoverNode')):
+		'''
+		This is a message handler which is signalled from the driver to kill this node. 
+		Set is_alive flag to 1. This flag will be used by other nodes to figure out if this node is live or dead.
+		'''
+		#print("\nNode %s getting recovered" % ((str(proc_id))))
+		is_alive = 1
+		needs_join = True
+	
+	def print_fingers(id):
+		'''
+		Print the finger table entries corresponding to id
+		'''
+		if proc_id == id:
+			for i in range(1, m+1):
+				print(finger[i])
+
+	def print_successor_list(id):
+		'''
+		Print the successor list corresponding to id
+		'''
+		if proc_id == id:
+			print("\n")
+			for i in range(0, max_succ):
+				print("Node %s: succ_list[%s].id = %s" % (str(id), str(i), str(succ_list[i].id)))
+
+
+	def between(x, y, z):
+		'''
+		A function which checks of y is between x and z
+		'''
+		if (x == z):
+			return True
+
+		if (x < z):
+			if (x < y and y < z):
+				return True
+		else:
+			if (x < y or y < z):
+				return True
+
+		return False
