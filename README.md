@@ -76,9 +76,9 @@ java -cp ./open-chord/.;./open-chord/bin;./open-chord/lib/*;./open-chord/chord.p
 
 
 ## Credits:
-Open Source Implementation can be found here - https://github.com/jtan189/open-chord.
+Open Chord source code can be found here - https://github.com/jtan189/open-chord.
 
-We have referred the same source code and made changes to include driver program to compare implementations of Chords.
+For the Java version, we have referred the same source code and made changes to include driver program to compare implementations of Chords.
 
 
 
