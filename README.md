@@ -1,4 +1,4 @@
-# Implementing and evaluating DNS using Chord in DistAlgo
+# Implementing and evaluating DNS using Chord in DistAlgo and Java
 <https://sites.google.com/a/stonybrook.edu/sbcs535/projects/dns-chord-distalgo>
 ## Requirements
 Please run below commands to install below libraries before running this code:
